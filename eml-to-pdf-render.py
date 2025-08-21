@@ -52,15 +52,15 @@ def batch_convert_to_html(folder_path, dark_mode=False, output_dir=None):
     print(f"Successfully converted {len(converted_files)} files to HTML")
     return converted_files
 
-def batch_convert_to_pdf(folder_path, dark_mode=False, output_dir=None):
-    """Convert all .eml files in a folder to PDF"""
+def batch_convert_to_pdf(folder_path, dark_mode=False, output_dir=None, max_workers=4):
+    """Convert all .eml files in a folder to PDF using concurrent processing"""
     eml_files = get_eml_files_from_folder(folder_path)
     
     if not eml_files:
         print(f"No .eml files found in {folder_path}")
         return []
     
-    print(f"Found {len(eml_files)} .eml files to convert to PDF")
+    print(f"Found {len(eml_files)} .eml files to convert to PDF (using {max_workers} workers)")
     converted_files = []
     
     # Start shared HTTP server for dark mode if needed
@@ -82,11 +82,40 @@ def batch_convert_to_pdf(folder_path, dark_mode=False, output_dir=None):
         time.sleep(2)
     
     try:
-        for i, eml_file in enumerate(eml_files, 1):
-            print(f"Processing {i}/{len(eml_files)}: {os.path.basename(eml_file)}")
+        # Use ThreadPoolExecutor for concurrent processing
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+        
+        # Shared counter for progress tracking
+        counter = 0
+        lock = threading.Lock()
+        
+        def convert_with_progress(eml_file):
+            nonlocal counter
+            with lock:
+                counter += 1
+                current = counter
+                total = len(eml_files)
+                print(f"Processing {current}/{total}: {os.path.basename(eml_file)}")
+            
             result = convert_to_pdf(eml_file, dark_mode, output_dir, shared_server=dark_mode)
-            if result:
-                converted_files.append(result)
+            return result
+        
+        # Process files concurrently
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_file = {executor.submit(convert_with_progress, eml_file): eml_file for eml_file in eml_files}
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_file):
+                eml_file = future_to_file[future]
+                try:
+                    result = future.result()
+                    if result:
+                        converted_files.append(result)
+                except Exception as e:
+                    print(f"Error processing {os.path.basename(eml_file)}: {e}")
+                    
     finally:
         # Clean up server if it was started
         if server_thread and server_thread.is_alive():
@@ -96,15 +125,15 @@ def batch_convert_to_pdf(folder_path, dark_mode=False, output_dir=None):
     print(f"Successfully converted {len(converted_files)} files to PDF")
     return converted_files
 
-def batch_convert_to_png(folder_path, dark_mode=False, output_dir=None):
-    """Convert all .eml files in a folder to PNG"""
+def batch_convert_to_png(folder_path, dark_mode=False, output_dir=None, max_workers=4):
+    """Convert all .eml files in a folder to PNG using concurrent processing"""
     eml_files = get_eml_files_from_folder(folder_path)
     
     if not eml_files:
         print(f"No .eml files found in {folder_path}")
         return []
     
-    print(f"Found {len(eml_files)} .eml files to convert to PNG")
+    print(f"Found {len(eml_files)} .eml files to convert to PNG (using {max_workers} workers)")
     converted_files = []
     
     # Start shared HTTP server for dark mode if needed
@@ -126,11 +155,40 @@ def batch_convert_to_png(folder_path, dark_mode=False, output_dir=None):
         time.sleep(2)
     
     try:
-        for i, eml_file in enumerate(eml_files, 1):
-            print(f"Processing {i}/{len(eml_files)}: {os.path.basename(eml_file)}")
+        # Use ThreadPoolExecutor for concurrent processing
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        import threading
+        
+        # Shared counter for progress tracking
+        counter = 0
+        lock = threading.Lock()
+        
+        def convert_with_progress(eml_file):
+            nonlocal counter
+            with lock:
+                counter += 1
+                current = counter
+                total = len(eml_files)
+                print(f"Processing {current}/{total}: {os.path.basename(eml_file)}")
+            
             result = convert_to_png(eml_file, dark_mode, output_dir, shared_server=dark_mode)
-            if result:
-                converted_files.append(result)
+            return result
+        
+        # Process files concurrently
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # Submit all tasks
+            future_to_file = {executor.submit(convert_with_progress, eml_file): eml_file for eml_file in eml_files}
+            
+            # Collect results as they complete
+            for future in as_completed(future_to_file):
+                eml_file = future_to_file[future]
+                try:
+                    result = future.result()
+                    if result:
+                        converted_files.append(result)
+                except Exception as e:
+                    print(f"Error processing {os.path.basename(eml_file)}: {e}")
+                    
     finally:
         # Clean up server if it was started
         if server_thread and server_thread.is_alive():
@@ -189,13 +247,13 @@ def convert_to_pdf(eml_file, dark_mode=False, output_dir=None, shared_server=Fal
         # Use Playwright to render like Edge and save as PDF
         with sync_playwright() as p:
             if dark_mode and not shared_server:
-                # Use Chrome with Dark Reader extension and local server
+                # Use Chrome with local server for dark mode
                 import http.server
                 import socketserver
                 import threading
                 import time
                 
-                # Start local server for Dark Reader
+                # Start local server for dark mode
                 def start_server():
                     PORT = 8000
                     Handler = http.server.SimpleHTTPRequestHandler
@@ -206,13 +264,10 @@ def convert_to_pdf(eml_file, dark_mode=False, output_dir=None, shared_server=Fal
                 server_thread.start()
                 time.sleep(2)
                 
-                extension_path = os.path.abspath("./extensions/dark-reader")
                 browser = p.chromium.launch_persistent_context(
                     user_data_dir="./browser_data",
                     headless=True,
                     args=[
-                        f"--load-extension={extension_path}",
-                        f"--disable-extensions-except={extension_path}",
                         "--allow-running-insecure-content",
                         "--disable-web-security"
                     ]
@@ -242,51 +297,26 @@ def convert_to_pdf(eml_file, dark_mode=False, output_dir=None, shared_server=Fal
                     # If that also fails, just wait a bit and continue
                     page.wait_for_timeout(2000)
             
-            # Enable Dark Reader if requested
+            # Enable dark mode if requested
             if dark_mode:
+                # Apply CSS-based dark mode
                 page.evaluate("""
-                    // Force enable Dark Reader and keep it enabled
-                    function enableDarkReader() {
-                        if (window.DarkReader && window.DarkReader.enable) {
-                            window.DarkReader.enable({
-                                brightness: 100,
-                                contrast: 100,
-                                sepia: 0
-                            });
-                            console.log('Dark Reader enabled with settings!');
-                            return true;
-                        } else {
-                            console.log('Dark Reader not found, using CSS fallback');
-                            const style = document.createElement('style');
-                            style.id = 'force-dark-mode';
-                            style.textContent = `
-                                html { filter: invert(1) hue-rotate(180deg) !important; }
-                                img, video, picture, svg { filter: invert(1) hue-rotate(180deg) !important; }
-                                [style*="background"] { filter: invert(1) hue-rotate(180deg) !important; }
-                            `;
-                            document.head.appendChild(style);
-                            return false;
-                        }
-                    }
-                    
-                    // Try multiple times to ensure it sticks
-                    setTimeout(enableDarkReader, 500);
-                    setTimeout(enableDarkReader, 1500);
-                    setTimeout(enableDarkReader, 3000);
-                    
-                    // Monitor for changes and re-enable if needed
-                    setInterval(() => {
-                        if (window.DarkReader && !window.DarkReader.isEnabled()) {
-                            enableDarkReader();
-                            console.log('Re-enabled Dark Reader');
-                        }
-                    }, 1000);
+                    // Apply CSS-based dark mode
+                    console.log('Applying CSS-based dark mode...');
+                    const style = document.createElement('style');
+                    style.id = 'force-dark-mode';
+                    style.textContent = `
+                        html { filter: invert(1) hue-rotate(180deg) !important; }
+                        img, video, picture, svg { filter: invert(1) hue-rotate(180deg) !important; }
+                        [style*="background"] { filter: invert(1) hue-rotate(180deg) !important; }
+                    `;
+                    document.head.appendChild(style);
+                    console.log('CSS-based dark mode applied');
                 """)
-                # Wait for Dark Reader to apply
-                page.wait_for_timeout(5000)
+                # Wait for dark mode to apply
+                page.wait_for_timeout(2000)
                 
                 # Before PDF generation, inject print-friendly dark CSS
-                # This works around Chrome disabling extensions during print/PDF
                 page.evaluate("""
                     console.log('Adding print-friendly dark mode CSS...');
                     
@@ -399,13 +429,13 @@ def convert_to_png(eml_file, dark_mode=False, output_dir=None, shared_server=Fal
         # Use Playwright to render like Edge and save as PNG
         with sync_playwright() as p:
             if dark_mode and not shared_server:
-                # Use Chrome with Dark Reader extension and local server
+                # Use Chrome with local server for dark mode
                 import http.server
                 import socketserver
                 import threading
                 import time
                 
-                # Start local server for Dark Reader
+                # Start local server for dark mode
                 def start_server():
                     PORT = 8000
                     Handler = http.server.SimpleHTTPRequestHandler
@@ -416,13 +446,10 @@ def convert_to_png(eml_file, dark_mode=False, output_dir=None, shared_server=Fal
                 server_thread.start()
                 time.sleep(2)
                 
-                extension_path = os.path.abspath("./extensions/dark-reader")
                 browser = p.chromium.launch_persistent_context(
                     user_data_dir="./browser_data",
                     headless=True,
                     args=[
-                        f"--load-extension={extension_path}",
-                        f"--disable-extensions-except={extension_path}",
                         "--allow-running-insecure-content",
                         "--disable-web-security"
                     ]
@@ -451,49 +478,24 @@ def convert_to_png(eml_file, dark_mode=False, output_dir=None, shared_server=Fal
                 except:
                     # If that also fails, just wait a bit and continue
                     page.wait_for_timeout(2000)
-            
-            # Enable Dark Reader if requested
+
+            # Enable dark mode if requested
             if dark_mode:
+                # Apply CSS-based dark mode
                 page.evaluate("""
-                    // Force enable Dark Reader and keep it enabled
-                    function enableDarkReader() {
-                        if (window.DarkReader && window.DarkReader.enable) {
-                            window.DarkReader.enable({
-                                brightness: 100,
-                                contrast: 100,
-                                sepia: 0
-                            });
-                            console.log('Dark Reader enabled with settings!');
-                            return true;
-                        } else {
-                            console.log('Dark Reader not found, using CSS fallback');
-                            const style = document.createElement('style');
-                            style.id = 'force-dark-mode';
-                            style.textContent = `
-                                html { filter: invert(1) hue-rotate(180deg) !important; }
-                                img, video, picture, svg { filter: invert(1) hue-rotate(180deg) !important; }
-                                [style*="background"] { filter: invert(1) hue-rotate(180deg) !important; }
-                            `;
-                            document.head.appendChild(style);
-                            return false;
-                        }
-                    }
-                    
-                    // Try multiple times to ensure it sticks
-                    setTimeout(enableDarkReader, 500);
-                    setTimeout(enableDarkReader, 1500);
-                    setTimeout(enableDarkReader, 3000);
-                    
-                    // Monitor for changes and re-enable if needed
-                    setInterval(() => {
-                        if (window.DarkReader && !window.DarkReader.isEnabled()) {
-                            enableDarkReader();
-                            console.log('Re-enabled Dark Reader');
-                        }
-                    }, 1000);
+                    // Apply CSS-based dark mode
+                    console.log('Applying CSS-based dark mode...');
+                    const style = document.createElement('style');
+                    style.id = 'force-dark-mode';
+                    style.textContent = `
+                        html { filter: invert(1) hue-rotate(180deg) !important; }
+                        img, video, picture, svg { filter: invert(1) hue-rotate(180deg) !important; }
+                        [style*="background"] { filter: invert(1) hue-rotate(180deg) !important; }
+                    `;
+                    document.head.appendChild(style);
+                    console.log('CSS-based dark mode applied');
                 """)
-                # Wait for Dark Reader to apply
-                page.wait_for_timeout(5000)
+                page.wait_for_timeout(2000)
                 
                 # Before screenshot, inject print-friendly dark CSS
                 # This ensures the screenshot captures the dark mode
@@ -607,9 +609,14 @@ def main():
         print("    python eml-to-pdf-render.py --pdf <eml_file> [--dark] [--output-dir <dir>]")
         print("    python eml-to-pdf-render.py --png <eml_file> [--dark] [--output-dir <dir>]")
         print("  Batch processing:")
-        print("    python eml-to-pdf-render.py --batch-html <folder_path> [--dark] [--output-dir <dir>]")
-        print("    python eml-to-pdf-render.py --batch-pdf <folder_path> [--dark] [--output-dir <dir>]")
-        print("    python eml-to-pdf-render.py --batch-png <folder_path> [--dark] [--output-dir <dir>]")
+        print("    python eml-to-pdf-render.py --batch-html <folder_path> [--dark] [--output-dir <dir>] [--workers <num>]")
+        print("    python eml-to-pdf-render.py --batch-pdf <folder_path> [--dark] [--output-dir <dir>] [--workers <num>]")
+        print("    python eml-to-pdf-render.py --batch-png <folder_path> [--dark] [--output-dir <dir>] [--workers <num>]")
+        print("")
+        print("Options:")
+        print("  --dark          Enable dark mode")
+        print("  --output-dir    Specify output directory")
+        print("  --workers       Number of concurrent workers (default: 4)")
         return
     
     option = sys.argv[1]
@@ -626,6 +633,23 @@ def main():
         except ValueError:
             pass
     
+    # Parse workers option
+    max_workers = 4  # Default
+    if "--workers" in sys.argv:
+        try:
+            workers_index = sys.argv.index("--workers")
+            if workers_index + 1 < len(sys.argv):
+                max_workers = int(sys.argv[workers_index + 1])
+                if max_workers < 1:
+                    print("Warning: Workers must be at least 1, using 1")
+                    max_workers = 1
+                elif max_workers > 16:
+                    print("Warning: Workers capped at 16 for stability")
+                    max_workers = 16
+        except (ValueError, IndexError):
+            print("Warning: Invalid workers value, using default (4)")
+            max_workers = 4
+    
     if not os.path.exists(target_path):
         print(f"Path not found: {target_path}")
         return
@@ -635,9 +659,9 @@ def main():
         if option == "--batch-html":
             batch_convert_to_html(target_path, dark_mode, output_dir)
         elif option == "--batch-pdf":
-            batch_convert_to_pdf(target_path, dark_mode, output_dir)
+            batch_convert_to_pdf(target_path, dark_mode, output_dir, max_workers)
         elif option == "--batch-png":
-            batch_convert_to_png(target_path, dark_mode, output_dir)
+            batch_convert_to_png(target_path, dark_mode, output_dir, max_workers)
         else:
             print("Invalid batch option. Use --batch-html, --batch-pdf, or --batch-png")
         return
